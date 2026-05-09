@@ -353,6 +353,33 @@ class SyncService {
     await _downloadDepenses(db);
     await _downloadBudgets(db);
     await _downloadSavingGoals(db);
+    await _fixDepenseForeignKeys(db);
+  }
+
+  Future<void> _fixDepenseForeignKeys(Database db) async {
+    final orphans = await db.rawQuery('''
+      SELECT d.id AS depense_id, d.remote_id AS depense_remote_id,
+             a.id AS article_local_id, a.remote_id AS article_remote_id,
+             u.id AS unite_local_id, u.remote_id AS unite_remote_id
+      FROM depenses d
+      LEFT JOIN articles a ON a.remote_id = d.article_id AND a.is_deleted = 0
+      LEFT JOIN unites u ON u.remote_id = d.unite_id AND u.is_deleted = 0
+      WHERE d.is_deleted = 0
+        AND d.synced = 1
+        AND (d.article_id IS NULL OR d.unite_id IS NULL)
+    ''');
+
+    for (final row in orphans) {
+      await db.update(
+        'depenses',
+        {
+          'article_id': row['article_local_id'] ?? row['depense_id'],
+          'unite_id': row['unite_local_id'] ?? row['depense_id'],
+        },
+        where: 'id = ?',
+        whereArgs: [row['depense_id']],
+      );
+    }
   }
 
   Future<void> _downloadCategories(Database db) async {
@@ -419,28 +446,39 @@ class SyncService {
   Future<void> _downloadDepenses(Database db) async {
     final rows = await _fetchChanged('depenses');
     for (final remote in rows) {
-      final deleted = remote['deleted_at'] != null;
-      final article = deleted
-          ? null
-          : await _localByRemoteId(db, 'articles', remote['article_id']);
-      final unite = deleted
-          ? null
-          : await _localByRemoteId(db, 'unites', remote['unite_id']);
-      if (!deleted && (article == null || unite == null)) continue;
-
-      await _upsertLocal(
-        db: db,
-        table: 'depenses',
-        remote: remote,
-        values: {
-          if (article != null) 'article_id': article['id'],
-          if (unite != null) 'unite_id': unite['id'],
+      final existing = await _localByRemoteId(db, 'depenses', remote['id']);
+      if (existing != null) {
+        await db.update('depenses', {
+          'article_id': null,
+          'unite_id': null,
           'quantite': remote['quantite'],
           'prix_unitaire': remote['prix_unitaire'],
           'total': remote['total'],
           'date_depense': remote['date_depense'],
-        },
-      );
+          'synced': 1,
+          'is_deleted': remote['deleted_at'] != null ? 1 : 0,
+          'created_at': remote['created_at'] ?? existing['created_at'],
+          'updated_at': remote['updated_at'] ?? _nowIso(),
+          'deleted_at': remote['deleted_at'],
+          'last_remote_updated_at': remote['updated_at'] ?? _nowIso(),
+        }, where: 'id = ?', whereArgs: [existing['id']]);
+      } else if (remote['deleted_at'] == null) {
+        await db.insert('depenses', {
+          'remote_id': remote['id'],
+          'article_id': null,
+          'unite_id': null,
+          'quantite': remote['quantite'],
+          'prix_unitaire': remote['prix_unitaire'],
+          'total': remote['total'],
+          'date_depense': remote['date_depense'],
+          'synced': 1,
+          'is_deleted': 0,
+          'created_at': remote['created_at'] ?? _nowIso(),
+          'updated_at': remote['updated_at'] ?? _nowIso(),
+          'deleted_at': null,
+          'last_remote_updated_at': remote['updated_at'] ?? _nowIso(),
+        });
+      }
     }
   }
 
