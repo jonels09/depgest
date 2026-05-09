@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config/supabase_config.dart';
+import '../database/dao.dart';
 import '../models/predictive_models.dart';
 import 'notification_service.dart';
 
@@ -177,11 +178,28 @@ class PredictiveAnalyticsService {
       detectAnomalies(userId, saveToDb: false, forceRefresh: forceRefresh),
     ]);
 
+    final scores = results[0] as FinancialScores?;
+    final xgboost = results[1] as XGBoostForecast?;
+    final prophet = results[2] as ProphetForecast?;
+    final anomalies = (results[3] as List<AnomalyAlert>?) ?? const <AnomalyAlert>[];
+
+    if (scores == null && xgboost == null && prophet == null && anomalies.isEmpty) {
+      debugPrint('[PredictiveAnalyticsService] Backend failed, falling back to Supabase DAO');
+      try {
+        final fallbackData = await getPredictions(userId: userId);
+        if (fallbackData.hasData) {
+          return fallbackData;
+        }
+      } catch (e) {
+        debugPrint('[PredictiveAnalyticsService] DAO fallback failed: $e');
+      }
+    }
+
     return PredictionData(
-      scores: results[0] as FinancialScores?,
-      xgboost: results[1] as XGBoostForecast?,
-      prophet: results[2] as ProphetForecast?,
-      anomalies: (results[3] as List<AnomalyAlert>?) ?? const <AnomalyAlert>[],
+      scores: scores,
+      xgboost: xgboost,
+      prophet: prophet,
+      anomalies: anomalies,
       fetchedAt: DateTime.now().toIso8601String(),
     );
   }
