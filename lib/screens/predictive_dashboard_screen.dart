@@ -153,6 +153,37 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
                     const SizedBox(height: 12),
                     _buildRecommendationsCard(scores),
                   ],
+
+                  // No data message
+                  if (scores == null && xgboost == null && prophet == null && anomalies.isEmpty) ...[
+                    const SizedBox(height: 40),
+                    Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.analytics_outlined, size: 80, color: Colors.grey[400]),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Aucune analyse disponible',
+                            style: TextStyle(
+                              fontSize: 18,
+                              color: Colors.grey[600],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Les analyses apparaîtront automatiquement\naprès génération par le backend IA',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[500],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
