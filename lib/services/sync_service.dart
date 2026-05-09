@@ -56,6 +56,12 @@ class SyncService {
     }
   }
 
+  Future<void> forceFullSync() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_lastPulledAtKey);
+    await syncAll();
+  }
+
   Future<void> rollbackLatestSnapshot() async {
     if (_syncing) return;
     _syncing = true;

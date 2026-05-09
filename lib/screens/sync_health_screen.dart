@@ -43,6 +43,32 @@ class _SyncHealthScreenState extends State<SyncHealthScreen> {
     await _load();
   }
 
+  Future<void> _forceFullSync() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Synchronisation complète?'),
+        content: const Text(
+          'Cela va downloader toutes les donnees depuis Supabase (y compris les anciennes). Les donnees locales seront conservees.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Synchroniser'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await SyncService.instance.forceFullSync();
+      await _load();
+    }
+  }
+
   Future<void> _rollback() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -93,7 +119,15 @@ class _SyncHealthScreenState extends State<SyncHealthScreen> {
                         child: FilledButton.icon(
                           onPressed: _syncNow,
                           icon: const Icon(Icons.sync),
-                          label: const Text('Synchroniser'),
+                          label: const Text('Sync'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _forceFullSync,
+                          icon: const Icon(Icons.cloud_download),
+                          label: const Text('Full Sync'),
                         ),
                       ),
                       const SizedBox(width: 8),
