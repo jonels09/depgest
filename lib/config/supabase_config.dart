@@ -8,9 +8,8 @@ class SupabaseConfig {
 
 /// Configuration du backend IA/ML prédictif
 class BackendConfig {
-  // Déployer le backend Python sur Render.com ou Railway.app
-  // puis mettre à jour cette URL
-  static const String baseUrl = 'https://depgest-predictive.onrender.com';
+  // Backend ML déployé sur Render
+  static const String baseUrl = 'https://depgest.onrender.com';
   // Pour localhost: 'http://localhost:8000'
 
   static const Duration timeout = Duration(seconds: 30);
