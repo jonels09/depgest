@@ -332,7 +332,7 @@ class ProphetForecaster:
         
         forecast_data = []
         base_date = pd.Timestamp.now()
-        base_amount = 1000.0  # Baseline
+        base_amount = 0.0  # Baseline
         
         for i in range(periods):
             date = base_date + pd.DateOffset(months=i+1)

@@ -218,6 +218,8 @@ class ProphetForecast {
   }
 
   Map<String, dynamic> get trend => _asMap(forecast['trend']);
+
+  String get modelVersion => _asString(forecast['model_version'], 'v1.0');
 }
 
 class AnomalyAlert {

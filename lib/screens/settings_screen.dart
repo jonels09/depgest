@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../database/dao.dart';
 import '../models/models.dart';
+import '../screens/auth_screen.dart';
 import '../services/notification_service.dart';
+import '../services/sync_service.dart';
 import 'sync_health_screen.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -98,6 +101,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               fontWeight: FontWeight.w600,
               color: _C.onSurface,
             ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Section Compte utilisateur ───────────────────────────────
+          _SectionLabel('Compte'),
+          _Card(
+            children: [
+              _SettingsTile(
+                icon: Icons.email_outlined,
+                label: Supabase.instance.client.auth.currentUser?.email ?? 'Non connecté',
+                trailing: const SizedBox.shrink(),
+              ),
+            ],
           ),
           const SizedBox(height: 24),
 
@@ -247,7 +263,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           // ── Bouton Déconnexion ───────────────────────────────────────
           OutlinedButton.icon(
-            onPressed: () {},
+            onPressed: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text('Déconnexion'),
+                  content: const Text(
+                    'Vous serez redirigé vers l\'écran de connexion. Vos données restent sauvegardées sur le cloud.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Annuler'),
+                    ),
+                    FilledButton(
+                      style: FilledButton.styleFrom(backgroundColor: _C.error),
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Se déconnecter'),
+                    ),
+                  ],
+                ),
+              );
+              if (ok == true && context.mounted) {
+                SyncService.instance.dispose();
+                await Supabase.instance.client.auth.signOut();
+                if (context.mounted) {
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (_) => const AuthScreen()),
+                    (_) => false,
+                  );
+                }
+              }
+            },
             icon: const Icon(Icons.logout, color: _C.error),
             label: const Text(
               'Déconnexion',

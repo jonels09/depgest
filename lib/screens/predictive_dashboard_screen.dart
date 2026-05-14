@@ -23,9 +23,12 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
     _refreshPredictions();
   }
 
-  void _refreshPredictions() {
+  void _refreshPredictions({bool force = false}) {
     setState(() {
-      _predictionsFuture = _analyticsService.getAllPredictions(widget.userId);
+      _predictionsFuture = _analyticsService.getAllPredictions(
+        widget.userId,
+        forceRefresh: force,
+      );
     });
   }
 
@@ -38,7 +41,7 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _refreshPredictions,
+            onPressed: () => _refreshPredictions(force: true),
             tooltip: 'Rafraîchir les données',
           ),
         ],
@@ -60,7 +63,7 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
                   Text('Erreur: ${snapshot.error}'),
                   const SizedBox(height: 16),
                   ElevatedButton(
-                    onPressed: _refreshPredictions,
+                    onPressed: () => _refreshPredictions(force: true),
                     child: const Text('Réessayer'),
                   ),
                 ],
@@ -76,7 +79,7 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
 
           return RefreshIndicator(
             onRefresh: () async {
-              _refreshPredictions();
+              _refreshPredictions(force: true);
               await _predictionsFuture;
             },
             child: SingleChildScrollView(
@@ -85,7 +88,7 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Section Scores Financiers
-                  if (scores != null) ...[
+                  if (scores != null && scores.windowMonths > 0) ...[
                     const Text(
                       '📊 Score Financier',
                       style: TextStyle(
@@ -99,7 +102,7 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
                   ],
 
                   // Section XGBoost Forecast
-                  if (xgboost != null && xgboost.forecast.isNotEmpty) ...[
+                  if (xgboost != null && xgboost.forecast.isNotEmpty && (scores?.windowMonths ?? 0) > 0) ...[
                     const Text(
                       '📈 Prévision Dépenses (XGBoost)',
                       style: TextStyle(
@@ -114,7 +117,7 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
 
                   // Section Prophet Forecast
                   if (prophet != null &&
-                      prophet.monthlyForecast.isNotEmpty) ...[
+                      prophet.monthlyForecast.isNotEmpty && (scores?.windowMonths ?? 0) > 0) ...[
                     const Text(
                       '🔮 Tendances Saisonnières (Prophet)',
                       style: TextStyle(
@@ -142,7 +145,7 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
                   ],
 
                   // Section Recommandations
-                  if (scores != null) ...[
+                  if (scores != null && scores.windowMonths > 0) ...[
                     const Text(
                       '💡 Recommandations',
                       style: TextStyle(
@@ -154,8 +157,10 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
                     _buildRecommendationsCard(scores),
                   ],
 
-                  // No data message
-                  if (scores == null && xgboost == null && prophet == null && anomalies.isEmpty) ...[
+                  // No data message or insufficient data
+                  if ((scores == null && xgboost == null && prophet == null && anomalies.isEmpty) || 
+                      (scores != null && scores.windowMonths < 2) ||
+                      (prophet != null && prophet.modelVersion == 'baseline')) ...[
                     const SizedBox(height: 40),
                     Center(
                       child: Column(
@@ -164,7 +169,9 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
                           Icon(Icons.analytics_outlined, size: 80, color: Colors.grey[400]),
                           const SizedBox(height: 16),
                           Text(
-                            'Aucune analyse disponible',
+                            (scores?.windowMonths != null && scores!.windowMonths < 2) || (prophet?.modelVersion == 'baseline')
+                                ? 'Données insuffisantes' 
+                                : 'Aucune analyse disponible',
                             style: TextStyle(
                               fontSize: 18,
                               color: Colors.grey[600],
@@ -173,7 +180,9 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Les analyses apparaîtront automatiquement\naprès génération par le backend IA',
+                            (scores?.windowMonths != null && scores!.windowMonths < 2) || (prophet?.modelVersion == 'baseline')
+                                ? 'L\'IA a besoin d\'au moins 2 mois de données historiques\npour générer des prévisions fiables.'
+                                : 'Les analyses apparaîtront automatiquement\naprès génération par le backend IA',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 14,
@@ -299,7 +308,7 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
             if (xgboost.predictedSpending != null) ...[
               _buildPredictionItem(
                 '💰 Dépenses Prévues',
-                '${xgboost.predictedSpending?.toStringAsFixed(2) ?? '--'} €',
+                '${xgboost.predictedSpending?.toStringAsFixed(0) ?? '--'} Ar',
                 Colors.blue,
               ),
               const SizedBox(height: 16),
@@ -307,7 +316,7 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
             if (xgboost.predictedBalance != null) ...[
               _buildPredictionItem(
                 '🏦 Solde Prévu',
-                '${xgboost.predictedBalance?.toStringAsFixed(2) ?? '--'} €',
+                '${xgboost.predictedBalance?.toStringAsFixed(0) ?? '--'} Ar',
                 xgboost.predictedBalance! >= 0 ? Colors.green : Colors.red,
               ),
               const SizedBox(height: 16),
@@ -353,7 +362,7 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
                     children: [
                       Text(e.key),
                       Text(
-                        '${e.value.toStringAsFixed(2)} €',
+                        '${e.value.toStringAsFixed(0)} Ar',
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ],
@@ -392,7 +401,7 @@ class _PredictiveDashboardScreenState extends State<PredictiveDashboardScreen> {
                     children: [
                       Text(ds.toString()),
                       Text(
-                        '${yhat.toStringAsFixed(2)} €',
+                        '${yhat.toStringAsFixed(0)} Ar',
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ],

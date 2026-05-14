@@ -113,21 +113,22 @@ class AnomalyDetector:
         if historical_df is not None:
             # Comparer avec historique
             for category in expenses_df['category'].unique():
-                recent = expenses_df[expenses_df['category'] == category]['total'].values
+                recent_df = expenses_df[expenses_df['category'] == category]
                 historical = historical_df[historical_df['category'] == category]['total'].values
                 
-                if len(historical) < 5 or len(recent) == 0:
+                if len(historical) < 5 or recent_df.empty:
                     continue
                 
                 mean_hist = historical.mean()
                 std_hist = historical.std()
                 
-                for amount in recent:
+                for row in recent_df.itertuples():
+                    amount = row.total
                     zscore = abs((amount - mean_hist) / (std_hist + 1e-6))
                     
                     if zscore > self.zscore_threshold:
                         anomalies.append({
-                            "depense_id": None,  # À remplir
+                            "depense_id": getattr(row, 'id', None),
                             "anomaly_type": "SUDDEN_SPIKE",
                             "severity": "MEDIUM" if zscore < 3 else "HIGH",
                             "description": f"Spike {category}: {amount:.2f} (z-score: {zscore:.2f})",
@@ -159,8 +160,9 @@ class AnomalyDetector:
         for amount in duplicates.index:
             matching = expenses_df[expenses_df['total'] == amount]
             if len(matching) >= 8:
+                dep_id = matching['id'].iloc[-1] if 'id' in matching.columns else None
                 anomalies.append({
-                    "depense_id": None,
+                    "depense_id": dep_id,
                     "anomaly_type": "FRAUD_SUSPICIOUS",
                     "severity": "MEDIUM",
                     "description": f"Repeat amount detected {len(matching)} times: {amount:.2f}",
@@ -177,8 +179,10 @@ class AnomalyDetector:
         
         for date, count in high_frequency.items():
             if count > 10:
+                matching = expenses_df[expenses_df['date'].dt.date == date]
+                dep_id = matching['id'].iloc[-1] if 'id' in matching.columns else None
                 anomalies.append({
-                    "depense_id": None,
+                    "depense_id": dep_id,
                     "anomaly_type": "FRAUD_SUSPICIOUS",
                     "severity": "HIGH",
                     "description": f"{count} dépenses en un jour: {date}",

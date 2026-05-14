@@ -3,6 +3,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'config/supabase_config.dart';
+import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 import 'services/sync_service.dart';
 
@@ -14,19 +15,6 @@ void main() async {
     url: SupabaseConfig.url,
     anonKey: SupabaseConfig.anonKey,
   );
-
-  // Anonymous auth gives every installation a Supabase user_id for RLS.
-  // Enable "Anonymous sign-ins" in Supabase Auth settings.
-  final supabase = Supabase.instance.client;
-  if (supabase.auth.currentSession == null) {
-    try {
-      await supabase.auth.signInAnonymously();
-    } catch (e) {
-      debugPrint('[Supabase] Anonymous sign-in failed: $e');
-    }
-  }
-
-  SyncService.instance.init();
 
   runApp(const DepGestApp());
 }
@@ -54,7 +42,48 @@ class DepGestApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const HomeScreen(),
+      home: const _AppEntry(),
     );
+  }
+}
+
+/// Point d'entrée intelligent : redirige vers Auth ou Home selon la session.
+class _AppEntry extends StatefulWidget {
+  const _AppEntry();
+
+  @override
+  State<_AppEntry> createState() => _AppEntryState();
+}
+
+class _AppEntryState extends State<_AppEntry> {
+  @override
+  void initState() {
+    super.initState();
+    // Écoute les changements d'état d'authentification en temps réel
+    Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+      if (!mounted) return;
+      final session = data.session;
+      if (session != null) {
+        // Utilisateur connecté → réinitialiser les erreurs de sync
+        // puis démarrer la sync (important après changement de compte)
+        SyncService.instance.resetSyncErrors().then((_) {
+          SyncService.instance.init();
+        });
+      }
+    });
+
+    // Si session déjà active au démarrage, lancer la sync
+    if (Supabase.instance.client.auth.currentSession != null) {
+      SyncService.instance.init();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session != null) {
+      return const HomeScreen();
+    }
+    return const AuthScreen();
   }
 }

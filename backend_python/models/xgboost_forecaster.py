@@ -197,33 +197,38 @@ class XGBoostForecaster:
         """
         Forecast simple pour utilisateurs avec peu de donnees.
         """
-        if expenses_df.empty:
+        if expenses_df.empty and income_df.empty:
             return self._default_forecast()
 
         try:
             expenses = expenses_df.copy()
             income = income_df.copy()
-            expenses['date'] = pd.to_datetime(expenses['date'], errors='coerce')
-            expenses['total'] = pd.to_numeric(expenses['total'], errors='coerce').fillna(0)
-            expenses = expenses.dropna(subset=['date'])
+            predicted_spending = 0.0
+            
+            if not expenses.empty:
+                expenses['date'] = pd.to_datetime(expenses['date'], errors='coerce')
+                expenses['total'] = pd.to_numeric(expenses['total'], errors='coerce').fillna(0)
+                expenses = expenses.dropna(subset=['date'])
 
-            monthly_expenses = expenses.groupby(
-                expenses['date'].dt.to_period('M')
-            )['total'].sum()
-            recent_expenses = monthly_expenses.tail(3)
-            predicted_spending = float(recent_expenses.mean()) if not recent_expenses.empty else 0.0
+                monthly_expenses = expenses.groupby(
+                    expenses['date'].dt.to_period('M')
+                )['total'].sum()
+                recent_expenses = monthly_expenses.tail(3)
+                predicted_spending = float(recent_expenses.mean()) if not recent_expenses.empty else 0.0
 
+            predicted_income = 0.0
             if not income.empty:
                 income['date'] = pd.to_datetime(income['date'], errors='coerce')
                 income['amount'] = pd.to_numeric(income['amount'], errors='coerce').fillna(0)
                 income = income.dropna(subset=['date'])
                 monthly_income = income.groupby(income['date'].dt.to_period('M'))['amount'].sum()
                 predicted_income = float(monthly_income.tail(3).mean()) if not monthly_income.empty else 0.0
-            else:
-                predicted_income = 0.0
 
             predicted_balance = predicted_income - predicted_spending
-            if predicted_income <= 0 and predicted_spending > 0:
+            
+            if predicted_income <= 0 and predicted_spending <= 0:
+                deficit_risk = 0.0
+            elif predicted_income <= 0 and predicted_spending > 0:
                 deficit_risk = 100.0
             elif predicted_balance < 0:
                 deficit_risk = 80.0
@@ -345,9 +350,25 @@ class XGBoostForecaster:
         """
         Recommande budgets par catégorie basé sur historique.
         """
+        default_distribution = {
+            "Alimentation": 0.50,
+            "Logement": 0.30,
+            "Transport": 0.20
+        }
         
         if expenses_df.empty or 'category' not in expenses_df.columns:
-            return {}
+            return {cat: float(ratio * total_budget) for cat, ratio in default_distribution.items()}
+        
+        category_ratio = expenses_df.groupby('category')['total'].sum()
+        if category_ratio.sum() <= 0:
+            return {cat: float(ratio * total_budget) for cat, ratio in default_distribution.items()}
+            
+        category_ratio = category_ratio / category_ratio.sum()
+        
+        return {
+            cat: float(ratio * total_budget)
+            for cat, ratio in category_ratio.items()
+        }
         
         category_ratio = expenses_df.groupby('category')['total'].sum()
         if category_ratio.sum() <= 0:
@@ -366,11 +387,19 @@ class XGBoostForecaster:
         """
         Retourne forecast par défaut si modèle non disponible.
         """
+        default_distribution = {
+            "Alimentation": 0.0,
+            "Logement": 0.0,
+            "Transport": 0.0
+        }
         return {
             "predicted_spending": 0.0,
             "predicted_balance": 0.0,
             "deficit_risk": 0.0,
-            "recommended_budget": {},
+            "recommended_budget": default_distribution,
+            "model_version": "baseline",
+            "forecast_date": pd.Timestamp.now().isoformat()
+        },
             "model_version": "baseline",
             "forecast_date": pd.Timestamp.now().isoformat()
         }

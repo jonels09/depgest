@@ -19,6 +19,37 @@ class SyncService {
 
   final ValueNotifier<SyncStatus> status = ValueNotifier(SyncStatus.idle);
 
+  /// Détecte si le compte utilisateur a changé depuis le dernier sync.
+  /// Si oui, force un re-upload complet (réinitialise tous les remote_id).
+  Future<void> _checkAndHandleUserSwitch() async {
+    final prefs = await SharedPreferences.getInstance();
+    final currentUserId = _supabase.auth.currentUser?.id;
+    if (currentUserId == null) return;
+
+    final lastSyncedUserId = prefs.getString(_lastSyncedUserKey);
+    if (lastSyncedUserId != null && lastSyncedUserId != currentUserId) {
+      debugPrint(
+        '[SyncService] 🔄 User switch detected: $lastSyncedUserId → $currentUserId',
+      );
+      debugPrint('[SyncService] Resetting all remote_ids for full re-upload...');
+      // Nouveau user → les remote_id de l'ancien compte sont invalides
+      final db = await DatabaseHelper.instance.database;
+      for (final table in _syncTables) {
+        await db.update(
+          table,
+          {'synced': 0, 'remote_id': null},
+          where: 'is_deleted = 0',
+        );
+      }
+      // Vider aussi le lastPulledAt pour télécharger toutes les données cloud
+      await prefs.remove(_lastPulledAtKey);
+      await resetSyncErrors();
+      debugPrint('[SyncService] ✅ Reset done — ready for full re-upload');
+    }
+    // Mémoriser le user_id actuel
+    await prefs.setString(_lastSyncedUserKey, currentUserId);
+  }
+
   void init() {
     _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
       final online = results.any((r) => r != ConnectivityResult.none);
@@ -39,12 +70,17 @@ class SyncService {
 
     final pullStartedAt = _nowIso();
     try {
+      // Détecter le changement de compte AVANT tout upload
+      await _checkAndHandleUserSwitch();
+
       final db = await DatabaseHelper.instance.database;
       await _createSnapshot(db);
-      await _uploadPending(db);
-      await _downloadChanged(db);
-
       final prefs = await SharedPreferences.getInstance();
+      final isFullSync = prefs.getString(_lastPulledAtKey) == null;
+      
+      await _downloadChanged(db, isFullSync: isFullSync);
+      await _uploadPending(db);
+
       await prefs.setString(_lastPulledAtKey, pullStartedAt);
       final openConflicts = await _openConflictCount(db);
       status.value = openConflicts > 0 ? SyncStatus.conflict : SyncStatus.done;
@@ -59,7 +95,25 @@ class SyncService {
   Future<void> forceFullSync() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_lastPulledAtKey);
+    // Vider les erreurs bloquantes pour permettre un retry immédiat
+    await resetSyncErrors();
+    
+    debugPrint('[SyncService] 🖥️ Full sync triggered (pulling all records)');
     await syncAll();
+  }
+
+  /// Réinitialise toutes les erreurs de sync pour forcer un retry immédiat.
+  /// À appeler après un changement de compte ou en cas de blocage.
+  Future<void> resetSyncErrors() async {
+    final db = await DatabaseHelper.instance.database;
+    // Réinitialiser next_retry_at pour que _canRetry retourne true
+    await db.update(
+      'sync_operations',
+      {'next_retry_at': null, 'status': 'pending'},
+      where: 'status = ? OR status = ?',
+      whereArgs: ['failed', 'conflict'],
+    );
+    debugPrint('[SyncService] 🔄 Sync errors reset — retries unblocked');
   }
 
   Future<void> rollbackLatestSnapshot() async {
@@ -142,14 +196,19 @@ class SyncService {
       try {
         if (await _hasRemoteConflict(db, table, row, operation)) continue;
         final remote = await mapper(db, row);
-        if (remote == null) continue;
+        if (remote == null) {
+          debugPrint('[SyncService] ⚠️ $table#${row['id']}: mapper returned null (foreign key not synced yet)');
+          continue;
+        }
 
+        debugPrint('[SyncService] ↗️ Uploading $table#${row['id']}: $remote');
         final response = await _supabase
             .from(table)
             .upsert(remote, onConflict: 'id')
             .select('id, updated_at')
             .single();
         final remoteUpdatedAt = response['updated_at'] ?? row['updated_at'];
+        debugPrint('[SyncService] ✅ $table#${row['id']} → remote_id=${response['id']}');
 
         await db.update(
           table,
@@ -171,6 +230,7 @@ class SyncService {
         );
         await _resolveRowErrors(db, table, row['id'] as int, operation);
       } catch (e, st) {
+        debugPrint('[SyncService] ❌ ERROR $table#${row['id']}: $e');
         await _recordError(
           db: db,
           table: table,
@@ -345,42 +405,54 @@ class SyncService {
     };
   }
 
-  Future<void> _downloadChanged(Database db) async {
-    await _downloadCategories(db);
-    await _downloadUnites(db);
-    await _downloadArticles(db);
-    await _downloadRevenus(db);
-    await _downloadDepenses(db);
-    await _downloadBudgets(db);
-    await _downloadSavingGoals(db);
-    await _fixDepenseForeignKeys(db);
+  Future<void> _downloadChanged(Database db, {bool isFullSync = false}) async {
+    await _downloadTable(db, 'categories', _downloadCategories, isFullSync);
+    await _downloadTable(db, 'unites', _downloadUnites, isFullSync);
+    await _downloadTable(db, 'articles', _downloadArticles, isFullSync);
+    await _downloadTable(db, 'revenus', _downloadRevenus, isFullSync);
+    await _downloadTable(db, 'depenses', _downloadDepenses, isFullSync);
+    await _downloadTable(db, 'budgets', _downloadBudgets, isFullSync);
+    await _downloadTable(db, 'saving_goals', _downloadSavingGoals, isFullSync);
   }
 
-  Future<void> _fixDepenseForeignKeys(Database db) async {
-    final orphans = await db.rawQuery('''
-      SELECT d.id AS depense_id, d.remote_id AS depense_remote_id,
-             a.id AS article_local_id, a.remote_id AS article_remote_id,
-             u.id AS unite_local_id, u.remote_id AS unite_remote_id
-      FROM depenses d
-      LEFT JOIN articles a ON a.remote_id = d.article_id AND a.is_deleted = 0
-      LEFT JOIN unites u ON u.remote_id = d.unite_id AND u.is_deleted = 0
-      WHERE d.is_deleted = 0
-        AND d.synced = 1
-        AND (d.article_id IS NULL OR d.unite_id IS NULL)
-    ''');
+  Future<void> _downloadTable(
+    Database db,
+    String table,
+    Future<void> Function(Database) downloader,
+    bool isFullSync,
+  ) async {
+    if (isFullSync) {
+      // Pour une sync complète, on veut aussi identifier ce qui a été supprimé sur le serveur (hard delete)
+      final rows = await _fetchChanged(table);
+      final remoteIds = rows.map((r) => r['id'] as String).toList();
+      
+      // On exécute le downloader normal (qui fait les upserts)
+      await downloader(db);
 
-    for (final row in orphans) {
-      await db.update(
-        'depenses',
-        {
-          'article_id': row['article_local_id'] ?? row['depense_id'],
-          'unite_id': row['unite_local_id'] ?? row['depense_id'],
-        },
-        where: 'id = ?',
-        whereArgs: [row['depense_id']],
-      );
+      // On supprime localement ce qui a un remote_id mais n'est plus dans la liste du serveur
+      // ET qui est marqué comme synchronisé (pour ne pas supprimer des créations locales en cours)
+      int deletedCount = 0;
+      if (remoteIds.isEmpty) {
+        deletedCount = await db.delete(
+          table,
+          where: 'remote_id IS NOT NULL AND synced = 1',
+        );
+      } else {
+        deletedCount = await db.delete(
+          table,
+          where: 'remote_id IS NOT NULL AND remote_id NOT IN (${List.filled(remoteIds.length, '?').join(',')}) AND synced = 1',
+          whereArgs: remoteIds,
+        );
+      }
+
+      if (deletedCount > 0) {
+        debugPrint('[SyncService] 🧹 Cleaned up $deletedCount orphaned records from $table');
+      }
+    } else {
+      await downloader(db);
     }
   }
+
 
   Future<void> _downloadCategories(Database db) async {
     final rows = await _fetchChanged('categories');
@@ -446,39 +518,26 @@ class SyncService {
   Future<void> _downloadDepenses(Database db) async {
     final rows = await _fetchChanged('depenses');
     for (final remote in rows) {
-      final existing = await _localByRemoteId(db, 'depenses', remote['id']);
-      if (existing != null) {
-        await db.update('depenses', {
-          'article_id': null,
-          'unite_id': null,
+      final deleted = remote['deleted_at'] != null;
+      
+      final article = deleted ? null : await _localByRemoteId(db, 'articles', remote['article_id']);
+      final unite = deleted ? null : await _localByRemoteId(db, 'unites', remote['unite_id']);
+      
+      if (!deleted && (article == null || unite == null)) continue;
+
+      await _upsertLocal(
+        db: db,
+        table: 'depenses',
+        remote: remote,
+        values: {
+          if (article != null) 'article_id': article['id'],
+          if (unite != null) 'unite_id': unite['id'],
           'quantite': remote['quantite'],
           'prix_unitaire': remote['prix_unitaire'],
           'total': remote['total'],
           'date_depense': remote['date_depense'],
-          'synced': 1,
-          'is_deleted': remote['deleted_at'] != null ? 1 : 0,
-          'created_at': remote['created_at'] ?? existing['created_at'],
-          'updated_at': remote['updated_at'] ?? _nowIso(),
-          'deleted_at': remote['deleted_at'],
-          'last_remote_updated_at': remote['updated_at'] ?? _nowIso(),
-        }, where: 'id = ?', whereArgs: [existing['id']]);
-      } else if (remote['deleted_at'] == null) {
-        await db.insert('depenses', {
-          'remote_id': remote['id'],
-          'article_id': null,
-          'unite_id': null,
-          'quantite': remote['quantite'],
-          'prix_unitaire': remote['prix_unitaire'],
-          'total': remote['total'],
-          'date_depense': remote['date_depense'],
-          'synced': 1,
-          'is_deleted': 0,
-          'created_at': remote['created_at'] ?? _nowIso(),
-          'updated_at': remote['updated_at'] ?? _nowIso(),
-          'deleted_at': null,
-          'last_remote_updated_at': remote['updated_at'] ?? _nowIso(),
-        });
-      }
+        },
+      );
     }
   }
 
@@ -544,7 +603,48 @@ class SyncService {
     required Map<String, dynamic> values,
   }) async {
     final remoteId = remote['id'];
-    final existing = await _localByRemoteId(db, table, remoteId);
+    var existing = await _localByRemoteId(db, table, remoteId);
+
+    // Si pas trouvé par remote_id, tenter par business keys pour éviter les doublons (deduplication)
+    if (existing == null) {
+      if (table == 'categories' || table == 'unites' || table == 'articles') {
+        final nom = values['nom'];
+        if (nom != null) {
+          final whereClause = table == 'articles' 
+            ? 'nom = ? AND categorie_id = ? AND remote_id IS NULL'
+            : 'nom = ? AND remote_id IS NULL';
+          final whereArgs = table == 'articles'
+            ? [nom, values['categorie_id']]
+            : [nom];
+          final rows = await db.query(table, where: whereClause, whereArgs: whereArgs);
+          if (rows.isNotEmpty) {
+            existing = rows.first;
+            debugPrint('[SyncService] 🔗 Deduplicated $table "$nom" by business keys');
+          }
+        }
+      } else if (table == 'revenus') {
+        final rows = await db.query(
+          'revenus',
+          where: 'source = ? AND montant = ? AND date_revenu = ? AND remote_id IS NULL',
+          whereArgs: [values['source'], values['montant'], values['date_revenu']],
+        );
+        if (rows.isNotEmpty) {
+          existing = rows.first;
+          debugPrint('[SyncService] 🔗 Deduplicated revenu "${values['source']}"');
+        }
+      } else if (table == 'depenses') {
+        final rows = await db.query(
+          'depenses',
+          where: 'article_id = ? AND total = ? AND date_depense = ? AND remote_id IS NULL',
+          whereArgs: [values['article_id'], values['total'], values['date_depense']],
+        );
+        if (rows.isNotEmpty) {
+          existing = rows.first;
+          debugPrint('[SyncService] 🔗 Deduplicated depense for article_id ${values['article_id']}');
+        }
+      }
+    }
+
     final remoteUpdatedAt = remote['updated_at'] as String? ?? _nowIso();
     final deleted = remote['deleted_at'] != null;
 
@@ -568,7 +668,7 @@ class SyncService {
           'remote_id': remoteId,
           'synced': 1,
           'is_deleted': deleted ? 1 : 0,
-          'created_at': remote['created_at'] ?? existing['created_at'],
+          if (remote['created_at'] != null) 'created_at': remote['created_at'],
           'updated_at': remoteUpdatedAt,
           'deleted_at': remote['deleted_at'],
           'last_remote_updated_at': remoteUpdatedAt,
@@ -873,6 +973,7 @@ class SyncService {
 }
 
 const _lastPulledAtKey = 'sync.lastPulledAt';
+const _lastSyncedUserKey = 'sync.lastSyncedUser';
 const _syncTables = [
   'categories',
   'unites',

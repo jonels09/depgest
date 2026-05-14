@@ -37,7 +37,7 @@ class _SaisieRevenuScreenState extends State<SaisieRevenuScreen> {
     if (!_formKey.currentState!.validate()) return;
     final revenu = Revenu(
       source: _sourceCtrl.text,
-      montant: double.parse(_montantCtrl.text),
+      montant: double.tryParse(_montantCtrl.text.replaceAll(',', '.')) ?? 0,
       dateRevenu: DateFormat('yyyy-MM-dd').format(_selectedDate),
     );
     await insertRevenu(revenu);
@@ -78,7 +78,7 @@ class _SaisieRevenuScreenState extends State<SaisieRevenuScreen> {
               decoration: const InputDecoration(
                 labelText: 'Montant',
                 border: OutlineInputBorder(),
-                suffixText: 'FCFA',
+                suffixText: 'Ar',
               ),
               validator: (v) =>
                   (v == null || double.tryParse(v) == null) ? 'Invalide' : null,

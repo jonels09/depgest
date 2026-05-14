@@ -48,9 +48,11 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _navIndex = 0;
+  double _revenusTotaux = 0;
+  double _depensesTotales = 0;
   double _revenusMois = 0;
   double _depensesMois = 0;
-  List<Depense> _recentDepenses = [];
+  List<dynamic> _recentActivities = [];
   bool _loading = true;
 
   @override
@@ -75,18 +77,26 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _load() async {
     final now = DateTime.now();
     setState(() => _loading = true);
-    final results = await Future.wait([
-      sommeRevenusMois(now.year, now.month),
-      sommeDepensesMois(now.year, now.month),
-      getDepensesMois(now.year, now.month),
-    ]);
-    setState(() {
-      _revenusMois = results[0] as double;
-      _depensesMois = results[1] as double;
-      final all = results[2] as List<Depense>;
-      _recentDepenses = all.take(5).toList();
-      _loading = false;
-    });
+    try {
+      final results = await Future.wait([
+        sommeRevenusMois(now.year, now.month),
+        sommeDepensesMois(now.year, now.month),
+        sommeRevenusTotaux(),
+        sommeDepensesTotales(),
+        getToutesActivitesRecentes(10),
+      ]);
+      setState(() {
+        _revenusMois = results[0] as double;
+        _depensesMois = results[1] as double;
+        _revenusTotaux = results[2] as double;
+        _depensesTotales = results[3] as double;
+        _recentActivities = results[4] as List<dynamic>;
+        _loading = false;
+      });
+    } catch (e, st) {
+      debugPrint('[HomeScreen] Error loading data: $e\n$st');
+      setState(() => _loading = false);
+    }
   }
 
   String get _userId =>
@@ -100,9 +110,10 @@ class _HomeScreenState extends State<HomeScreen> {
         index: _navIndex,
         children: [
           _DashboardTab(
+            soldeGlobal: _revenusTotaux - _depensesTotales,
             revenusMois: _revenusMois,
             depensesMois: _depensesMois,
-            recentDepenses: _recentDepenses,
+            recentActivities: _recentActivities,
             loading: _loading,
             onRefresh: _load,
             userId: _userId,
@@ -126,18 +137,20 @@ class _HomeScreenState extends State<HomeScreen> {
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
 class _DashboardTab extends StatelessWidget {
+  final double soldeGlobal;
   final double revenusMois;
   final double depensesMois;
-  final List<Depense> recentDepenses;
+  final List<dynamic> recentActivities;
   final bool loading;
   final VoidCallback onRefresh;
   final String userId;
   final VoidCallback onOpenAnalytics;
 
   const _DashboardTab({
+    required this.soldeGlobal,
     required this.revenusMois,
     required this.depensesMois,
-    required this.recentDepenses,
+    required this.recentActivities,
     required this.loading,
     required this.onRefresh,
     required this.userId,
@@ -147,7 +160,7 @@ class _DashboardTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fmt = NumberFormat('#,##0.00', 'fr_FR');
-    final solde = revenusMois - depensesMois;
+    final solde = soldeGlobal;
 
     return Scaffold(
       backgroundColor: _C.surfaceContainerLow,
@@ -277,7 +290,7 @@ class _DashboardTab extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
 
-                  if (recentDepenses.isEmpty)
+                  if (recentActivities.isEmpty)
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 32),
                       child: Center(
@@ -288,8 +301,8 @@ class _DashboardTab extends StatelessWidget {
                       ),
                     )
                   else
-                    ...recentDepenses.map(
-                      (d) => _TransactionCard(depense: d, fmt: fmt),
+                    ...recentActivities.map(
+                      (item) => _TransactionCard(item: item, fmt: fmt),
                     ),
                 ],
               ),
@@ -642,10 +655,10 @@ class _MiniStat extends StatelessWidget {
 // ── Transaction card ─────────────────────────────────────────────────────────
 
 class _TransactionCard extends StatelessWidget {
-  final Depense depense;
+  final dynamic item; // Depense ou Revenu
   final NumberFormat fmt;
 
-  const _TransactionCard({required this.depense, required this.fmt});
+  const _TransactionCard({required this.item, required this.fmt});
 
   static const _catIcons = <String, IconData>{
     'Alimentation': Icons.restaurant,
@@ -673,17 +686,24 @@ class _TransactionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cat = depense.categorieNom ?? '';
-    final icon = _catIcons[cat] ?? Icons.receipt_long;
-    final bgColor = _catBg[cat] ?? _C.surfaceVariant;
-    final fgColor = _catFg[cat] ?? _C.onSurfaceVariant;
+    final bool isDepense = item is Depense;
+    
+    final String label = isDepense ? (item as Depense).articleNom ?? '' : (item as Revenu).source;
+    final String cat = isDepense ? ((item as Depense).categorieNom ?? '') : 'Revenu';
+    final double amount = isDepense ? (item as Depense).total : (item as Revenu).montant;
+    final String dateRaw = isDepense ? (item as Depense).dateDepense : (item as Revenu).dateRevenu;
 
-    final dateFmt = DateFormat('dd MMM, HH:mm', 'fr_FR');
+    final icon = isDepense ? (_catIcons[cat] ?? Icons.receipt_long) : Icons.savings;
+    final bgColor = isDepense ? (_catBg[cat] ?? _C.surfaceVariant) : _C.secondaryFixed;
+    final fgColor = isDepense ? (_catFg[cat] ?? _C.onSurfaceVariant) : _C.onSecondaryContainer;
+
+    final dateFmt = DateFormat('dd MMM', 'fr_FR');
     final dateStr = dateFmt.format(
-      DateTime.tryParse(depense.dateDepense) ?? DateTime.now(),
+      DateTime.tryParse(dateRaw) ?? DateTime.now(),
     );
 
-    final amountText = '- ${fmt.format(depense.total)} Ar';
+    final amountText = isDepense ? '- ${fmt.format(amount)} Ar' : '+ ${fmt.format(amount)} Ar';
+    final amountColor = isDepense ? _C.onSurface : _C.secondary;
 
     return Container(
       // ── Espacement généreux entre les cartes ──
@@ -728,17 +748,19 @@ class _TransactionCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        depense.articleNom ?? '',
+                        label,
                         style: const TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
                           color: _C.onSurface,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 3),
                       Text(
-                        dateStr,
+                        '$cat · $dateStr',
                         style: const TextStyle(
                           fontFamily: 'Inter',
                           fontSize: 12,

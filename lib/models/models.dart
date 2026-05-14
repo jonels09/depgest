@@ -44,7 +44,7 @@ class Revenu {
   factory Revenu.fromMap(Map<String, dynamic> m) => Revenu(
     id: m['id'],
     source: m['source'],
-    montant: m['montant'],
+    montant: (m['montant'] as num).toDouble(),
     dateRevenu: m['date_revenu'],
   );
   Map<String, dynamic> toMap() => {
@@ -85,9 +85,9 @@ class Depense {
     id: m['id'],
     articleId: m['article_id'],
     uniteId: m['unite_id'],
-    quantite: m['quantite'],
-    prixUnitaire: m['prix_unitaire'],
-    total: m['total'],
+    quantite: (m['quantite'] as num).toDouble(),
+    prixUnitaire: (m['prix_unitaire'] as num).toDouble(),
+    total: (m['total'] as num).toDouble(),
     dateDepense: m['date_depense'],
     articleNom: m['article_nom'],
     categorieNom: m['categorie_nom'],

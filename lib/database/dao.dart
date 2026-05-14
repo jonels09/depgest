@@ -375,6 +375,53 @@ Future<double> sommeRevenusPeriode(String start, String end) async {
   return (result.first['s'] as num).toDouble();
 }
 
+Future<double> sommeRevenusTotaux() async {
+  final db = await DatabaseHelper.instance.database;
+  final result = await db.rawQuery(
+    'SELECT COALESCE(SUM(montant), 0) AS s FROM revenus WHERE is_deleted = 0',
+  );
+  return (result.first['s'] as num).toDouble();
+}
+
+Future<double> sommeDepensesTotales() async {
+  final db = await DatabaseHelper.instance.database;
+  final result = await db.rawQuery(
+    'SELECT COALESCE(SUM(total), 0) AS s FROM depenses WHERE is_deleted = 0',
+  );
+  return (result.first['s'] as num).toDouble();
+}
+
+Future<List<dynamic>> getToutesActivitesRecentes(int limit) async {
+  final db = await DatabaseHelper.instance.database;
+  
+  // Récupérer les derniers revenus
+  final revRows = await db.query(
+    'revenus',
+    where: 'is_deleted = 0',
+    orderBy: 'date_revenu DESC',
+    limit: limit,
+  );
+  final revenus = revRows.map(Revenu.fromMap).toList();
+
+  // Récupérer les dernières dépenses
+  final depRows = await db.query(
+    'depenses',
+    where: 'is_deleted = 0',
+    orderBy: 'date_depense DESC',
+    limit: limit,
+  );
+  final depenses = depRows.map(Depense.fromMap).toList();
+
+  final all = <dynamic>[...revenus, ...depenses];
+  all.sort((a, b) {
+    final dateA = a is Depense ? a.dateDepense : (a as Revenu).dateRevenu;
+    final dateB = b is Depense ? b.dateDepense : (b as Revenu).dateRevenu;
+    return dateB.compareTo(dateA);
+  });
+  
+  return all.take(limit).toList();
+}
+
 Future<List<Map<String, dynamic>>> depensesParCategorieMois(
   int annee,
   int mois,
@@ -639,6 +686,16 @@ Future<MonthlyForecast> getMonthlyForecast(int annee, int mois) async {
 }
 
 Future<PredictionData> getPredictions({String? userId}) async {
+  final db = await DatabaseHelper.instance.database;
+  // Vérifier s'il y a des données locales
+  final countRes = await db.rawQuery('SELECT COUNT(*) as c FROM depenses WHERE is_deleted = 0');
+  final count = (countRes.first['c'] as num?)?.toInt() ?? 0;
+  
+  if (count == 0) {
+    debugPrint('[DAO] No local expenses, returning empty predictions');
+    return PredictionData.empty();
+  }
+
   final supabase = Supabase.instance.client;
   final resolvedUserId = userId ?? supabase.auth.currentUser?.id;
   if (resolvedUserId == null) {

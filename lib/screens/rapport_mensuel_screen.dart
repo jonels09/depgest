@@ -18,7 +18,7 @@ class _RapportMensuelScreenState extends State<RapportMensuelScreen> {
 
   double _totalRevenus = 0;
   double _totalDepenses = 0;
-  List<Depense> _depenses = [];
+  List<dynamic> _transactions = []; // Depense ou Revenu
   List<Map<String, dynamic>> _parCategorie = [];
   bool _loading = true;
 
@@ -30,19 +30,35 @@ class _RapportMensuelScreenState extends State<RapportMensuelScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final results = await Future.wait([
-      sommeRevenusMois(_annee, _mois),
-      sommeDepensesMois(_annee, _mois),
-      getDepensesMois(_annee, _mois),
-      depensesParCategorieMois(_annee, _mois),
-    ]);
-    setState(() {
-      _totalRevenus = results[0] as double;
-      _totalDepenses = results[1] as double;
-      _depenses = results[2] as List<Depense>;
-      _parCategorie = results[3] as List<Map<String, dynamic>>;
-      _loading = false;
-    });
+    try {
+      final results = await Future.wait([
+        sommeRevenusMois(_annee, _mois),
+        sommeDepensesMois(_annee, _mois),
+        getDepensesMois(_annee, _mois),
+        getRevenusParMois(_annee, _mois),
+        depensesParCategorieMois(_annee, _mois),
+      ]);
+      setState(() {
+        _totalRevenus = results[0] as double;
+        _totalDepenses = results[1] as double;
+        final depenses = results[2] as List<Depense>;
+        final revenus = results[3] as List<Revenu>;
+        
+        final all = <dynamic>[...depenses, ...revenus];
+        all.sort((a, b) {
+          final dateA = a is Depense ? a.dateDepense : (a as Revenu).dateRevenu;
+          final dateB = b is Depense ? b.dateDepense : (b as Revenu).dateRevenu;
+          return dateB.compareTo(dateA);
+        });
+        _transactions = all;
+        
+        _parCategorie = results[4] as List<Map<String, dynamic>>;
+        _loading = false;
+      });
+    } catch (e, st) {
+      debugPrint('[RapportMensuel] Error loading data: $e\n$st');
+      setState(() => _loading = false);
+    }
   }
 
   void _prevMois() {
@@ -155,7 +171,7 @@ class _RapportMensuelScreenState extends State<RapportMensuelScreen> {
                         ),
                       ),
                       Text(
-                        '${resteAVivre >= 0 ? '+' : ''}${fmt.format(resteAVivre)} FCFA',
+                        '${resteAVivre >= 0 ? '+' : ''}${fmt.format(resteAVivre)} Ar',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 18,
@@ -188,31 +204,49 @@ class _RapportMensuelScreenState extends State<RapportMensuelScreen> {
 
                 // Liste détaillée
                 const Text(
-                  'Détail des dépenses',
+                  'Détail des activités',
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                 ),
                 const SizedBox(height: 8),
-                if (_depenses.isEmpty)
+                if (_transactions.isEmpty)
                   const Center(
                     child: Padding(
                       padding: EdgeInsets.all(16),
-                      child: Text('Aucune dépense ce mois.'),
+                      child: Text('Aucune activité ce mois.'),
                     ),
                   )
                 else
-                  ..._depenses.map(
-                    (d) => Card(
-                      child: ListTile(
-                        title: Text(d.articleNom ?? ''),
-                        subtitle: Text(
-                          '${d.categorieNom} · ${d.quantite} ${d.uniteNom} · ${d.dateDepense}',
+                  ..._transactions.map(
+                    (item) {
+                      final isDepense = item is Depense;
+                      final title = isDepense ? item.articleNom : item.source;
+                      final date = isDepense ? item.dateDepense : item.dateRevenu;
+                      final amount = isDepense ? item.total : item.montant;
+                      final subtitle = isDepense 
+                        ? '${item.categorieNom} · ${item.quantite} ${item.uniteNom} · $date'
+                        : 'Revenu · $date';
+                      
+                      return Card(
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: isDepense ? Colors.red.shade50 : Colors.green.shade50,
+                            child: Icon(
+                              isDepense ? Icons.remove : Icons.add,
+                              color: isDepense ? Colors.red : Colors.green,
+                            ),
+                          ),
+                          title: Text(title ?? ''),
+                          subtitle: Text(subtitle),
+                          trailing: Text(
+                            '${isDepense ? '-' : '+'} ${fmt.format(amount)} Ar',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: isDepense ? Colors.red.shade700 : Colors.green.shade700,
+                            ),
+                          ),
                         ),
-                        trailing: Text(
-                          '${fmt.format(d.total)} FCFA',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ),
+                      );
+                    },
                   ),
               ],
             ),
@@ -258,7 +292,7 @@ class _SummaryCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '${fmt.format(amount)} FCFA',
+              '${fmt.format(amount)} Ar',
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 color: color,
